@@ -3,3 +3,9 @@
 www-client/brave-browser verify-sig
 www-client/brave-browser-beta verify-sig
 www-client/brave-browser-nightly verify-sig
+
+# Aaron Bush <theawpportunist@gmail.com> (2026-08-10)
+# Signature files may change after initial release
+www-client/brave-origin verify-sig
+www-client/brave-origin-beta verify-sig
+www-client/brave-origin-nightly verify-sig

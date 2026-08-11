@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+  <maintainer type="person">
+    <email>theawpportunist@gmail.com</email>
+    <name>Aaron Bush</name>
+  </maintainer>
+  <longdescription>
+    Brave Origin nightly is the nightly channel of the minimalist build of the Brave browser. It keeps Brave
+    Shields — the ad blocking, tracker blocking, and privacy protections — and
+    the underlying Chromium engine, but drops the additional products bundled
+    with the regular browser: Leo, News, Playlist, Rewards (and Brave Ads),
+    Speedreader, Talk, Tor, VPN, Wallet (and Web3 domains), Wayback Machine,
+    Web Discovery Project, and email aliases. It also omits the daily usage
+    ping, crash reporting, and the P3A privacy-preserving analytics.
+
+    Origin is free on Linux. It stores its profile in its own
+    directory under ~/.config/BraveSoftware/, so it can be installed alongside
+    www-client/brave-browser and www-client/brave-origin without sharing data.
+  </longdescription>
+  <upstream>
+    <remote-id type="github">brave/brave-browser</remote-id>
+  </upstream>
+  <use>
+    <flag name="verify-sig">Verify the release checksum using Brave's OpenPGP signature</flag>
+  </use>
+</pkgmetadata>

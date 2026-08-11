@@ -39,6 +39,34 @@ SIGNING_KEYS = {
     "nightly": "brave-browser-pre-release.asc",
 }
 
+# Package families tracked by this overlay. Both are published as .deb assets
+# on the same brave/brave-browser releases.
+PRODUCTS = ("brave-browser", "brave-origin")
+
+# Brave publishes arm64 .deb packages for the Origin pre-release channels only
+# sporadically. Requiring them would stall updates indefinitely, so those two
+# packages are amd64-only (which matches their KEYWORDS).
+PRODUCT_ARCHES = {
+    ("brave-origin", "beta"): ("amd64",),
+    ("brave-origin", "nightly"): ("amd64",),
+}
+
+
+def get_arches(product, channel):
+    return PRODUCT_ARCHES.get((product, channel), ARCHES)
+
+
+def product_from_name(name):
+    """Map a package name (e.g. brave-origin-beta) to its product family."""
+    for product in sorted(PRODUCTS, key=len, reverse=True):
+        if name == product or name.startswith(f"{product}-"):
+            return product
+    raise ValueError(f"Unknown product for package '{name}'.")
+
+
+def product_from_path(path):
+    return product_from_name(os.path.basename(os.path.dirname(path)))
+
 
 def verify_release_signature(channel, version, name):
     key_file = SIGNING_KEYS.get(channel)
@@ -115,8 +143,12 @@ def handle_rate_limit(res):
     return False
 
 
-def get_latest_releases():
-    releases = {channel: None for channel, _ in CHANNELS_WITH_TITLE}
+def get_latest_releases(products=PRODUCTS):
+    releases = {
+        product: {channel: None for channel, _ in CHANNELS_WITH_TITLE}
+        for product in products
+    }
+    releases_wanted = len(products) * len(CHANNELS)
     releases_found = 0
     page = 0
     MAX_PAGES = 5
@@ -138,50 +170,65 @@ def get_latest_releases():
                 continue
 
             for channel, title in CHANNELS_WITH_TITLE:
-                if not releases[channel] and release["name"].startswith(title):
-                    tag = release["tag_name"]
-                    assert tag[0] == "v"
-                    version = tag[1:]
+                if not release["name"].startswith(title):
+                    continue
 
-                    name = make_name_from_channel(channel)
+                tag = release["tag_name"]
+                assert tag[0] == "v"
+                version = tag[1:]
+                asset_files = {asset["name"] for asset in release["assets"]}
+
+                for product in products:
+                    if releases[product][channel]:
+                        continue
+
+                    name = make_name_from_channel(channel, base_name=product)
                     required_assets = {
                         BRAVE_SOURCE_FILE.format(name=name, version=version, arch=arch)
-                        for arch in ARCHES
+                        for arch in get_arches(product, channel)
                     }
-                    asset_files = {asset["name"] for asset in release["assets"]}
                     if required_assets.issubset(
                         asset_files
                     ) and verify_release_signature(channel, version, name):
-                        releases[channel] = tag[1:]
+                        releases[product][channel] = version
                         releases_found += 1
 
-            if releases_found == len(releases):
+            if releases_found == releases_wanted:
                 break
 
-        if releases_found == len(releases):
+        if releases_found == releases_wanted:
             break
 
         url = response.links.get("next", {}).get("url")
         page += 1
 
-    if not releases_found == len(releases):
-        raise RuntimeError("Could not find latest release for all channels.")
+    if releases_found != releases_wanted:
+        missing = [
+            f"{make_name_from_channel(channel, base_name=product)}"
+            for product in products
+            for channel in CHANNELS
+            if not releases[product][channel]
+        ]
+        raise RuntimeError(
+            f"Could not find latest release for: {', '.join(missing)}."
+        )
 
     return releases
 
 
 def get_new_releases(releases, repo_dir=None):
     new_releases = dict()
-    for channel, version in releases.items():
-        ebuilds, _ = get_ebuilds(channel, repo_dir=repo_dir)
-        ebuild_versions = {extract_version(ebuild) for ebuild in ebuilds}
-        if version not in ebuild_versions:
-            new_releases[channel] = version
+    for product, channels in releases.items():
+        for channel, version in channels.items():
+            ebuilds, _ = get_ebuilds(channel, base_name=product, repo_dir=repo_dir)
+            ebuild_versions = {extract_version(ebuild) for ebuild in ebuilds}
+            if version not in ebuild_versions:
+                new_releases.setdefault(product, {})[channel] = version
 
     return new_releases
 
 
-def update_manifest(ebuild_dir, name):
+def update_manifest(ebuild_dir, name, arches=ARCHES):
     ebuilds = glob.glob(os.path.join(ebuild_dir, "*.ebuild"))
     versions = set(extract_version(ebuild) for ebuild in ebuilds)
     files_in_manifest = set()
@@ -192,29 +239,35 @@ def update_manifest(ebuild_dir, name):
             "version": version,
         }
         for version in versions
-        for arch in ARCHES
+        for arch in arches
     ]
     sources_by_filename = {source["file"]: source for source in sources}
-    with open(os.path.join(ebuild_dir, "Manifest"), "r") as f:
-        lines = f.readlines()
-        new_lines = []
-        for line in lines:
-            parts = line.split(" ")
-            if parts[0] == "DIST":
-                if parts[1] in sources_by_filename:
-                    # Keep DIST lines for current ebuilds
-                    new_lines.append(line)
-                    files_in_manifest.add(parts[1])
-                elif parts[1].endswith(".sha256"):
-                    # Keep DIST lines for associated checksum files
-                    if parts[1][: -len(".sha256")] in sources_by_filename:
-                        new_lines.append(line)
-                elif parts[1].endswith(".sha256.asc"):
-                    # Keep DIST lines for associated checksum signature files
-                    if parts[1][: -len(".sha256.asc")] in sources_by_filename:
-                        new_lines.append(line)
-            else:
+    manifest_path = os.path.join(ebuild_dir, "Manifest")
+    # A newly added package has no Manifest yet; start from an empty one.
+    if os.path.exists(manifest_path):
+        with open(manifest_path, "r") as f:
+            lines = f.readlines()
+    else:
+        lines = []
+
+    new_lines = []
+    for line in lines:
+        parts = line.split(" ")
+        if parts[0] == "DIST":
+            if parts[1] in sources_by_filename:
+                # Keep DIST lines for current ebuilds
                 new_lines.append(line)
+                files_in_manifest.add(parts[1])
+            elif parts[1].endswith(".sha256"):
+                # Keep DIST lines for associated checksum files
+                if parts[1][: -len(".sha256")] in sources_by_filename:
+                    new_lines.append(line)
+            elif parts[1].endswith(".sha256.asc"):
+                # Keep DIST lines for associated checksum signature files
+                if parts[1][: -len(".sha256.asc")] in sources_by_filename:
+                    new_lines.append(line)
+        else:
+            new_lines.append(line)
 
     def add_hash(url, filename):
         hashers = {algo: hashlib.new(algo.lower()) for algo in MANIFEST_HASH_ALGOS}
@@ -238,69 +291,95 @@ def update_manifest(ebuild_dir, name):
             add_hash(source["url"] + ".sha256", source["file"] + ".sha256")
             add_hash(source["url"] + ".sha256.asc", source["file"] + ".sha256.asc")
 
-    with open(os.path.join(ebuild_dir, "Manifest"), "w") as f:
-        f.writelines(new_lines)
+    with open(manifest_path, "w") as f:
+        f.writelines(sorted(new_lines))
 
 
 def add_ebuilds_for_new_releases(new_releases, repo_dir, commit_changes=False):
     new_ebuilds = dict()
-    for channel, version in new_releases.items():
-        ebuilds, ebuild_dir = get_ebuilds(channel, repo_dir=repo_dir, only_latest=True)
-        if len(ebuilds) == 0:
-            raise RuntimeError(f"No ebuilds for release channel '{channel}'.")
-        latest_ebuild = ebuilds[0]
-        name = make_name_from_channel(channel)
-        filename = EBUILD_FILE.format(name=name, version=version)
-        new_ebuild = os.path.join(ebuild_dir, filename)
-
-        shutil.copy(latest_ebuild, new_ebuild)
-        update_manifest(ebuild_dir, name)
-        new_ebuilds.setdefault(channel, []).append(version)
-
-        if commit_changes:
-            subprocess.run(
-                ["git", "add", new_ebuild, os.path.join(ebuild_dir, "Manifest")],
-                check=True,
+    for product, channels in new_releases.items():
+        for channel, version in channels.items():
+            ebuilds, ebuild_dir = get_ebuilds(
+                channel, base_name=product, repo_dir=repo_dir, only_latest=True
             )
-            subprocess.run(
-                ["git", "commit", "-m", f"www-client/{name}: added {version}"],
-                check=True,
-            )
+            if len(ebuilds) == 0:
+                raise RuntimeError(
+                    f"No ebuilds for '{product}' release channel '{channel}'."
+                )
+            latest_ebuild = ebuilds[0]
+            name = make_name_from_channel(channel, base_name=product)
+            filename = EBUILD_FILE.format(name=name, version=version)
+            new_ebuild = os.path.join(ebuild_dir, filename)
+
+            shutil.copy(latest_ebuild, new_ebuild)
+            update_manifest(ebuild_dir, name, arches=get_arches(product, channel))
+            new_ebuilds.setdefault(product, {}).setdefault(channel, []).append(version)
+
+            if commit_changes:
+                subprocess.run(
+                    ["git", "add", new_ebuild, os.path.join(ebuild_dir, "Manifest")],
+                    check=True,
+                )
+                subprocess.run(
+                    ["git", "commit", "-m", f"www-client/{name}: added {version}"],
+                    check=True,
+                )
 
     return new_ebuilds
 
 
-def update_ebuilds(repo_dir=None, commit_changes=False):
+def update_ebuilds(repo_dir=None, commit_changes=False, products=PRODUCTS):
     repo_dir = repo_dir or os.getcwd()
 
-    releases = get_latest_releases()
+    releases = get_latest_releases(products=products)
     new_releases = get_new_releases(releases, repo_dir)
     return add_ebuilds_for_new_releases(
         new_releases, repo_dir, commit_changes=commit_changes
     )
 
 
-def prune_ebuilds(repo_dir=None, commit_changes=False, successful_channels_only=False):
+def regen_manifests(repo_dir=None, products=PRODUCTS):
+    """Recompute every Manifest from the ebuilds currently present."""
+    repo_dir = repo_dir or os.getcwd()
+
+    for product in products:
+        for channel in CHANNELS:
+            name = make_name_from_channel(channel, base_name=product)
+            ebuilds, ebuild_dir = get_ebuilds(
+                channel, base_name=product, repo_dir=repo_dir
+            )
+            if not ebuilds:
+                continue
+            print(f"Hashing distfiles for www-client/{name}...")
+            update_manifest(ebuild_dir, name, arches=get_arches(product, channel))
+
+
+def prune_ebuilds(
+    repo_dir=None, commit_changes=False, successful_channels_only=False, products=PRODUCTS
+):
     repo_dir = repo_dir or os.getcwd()
 
     pruned_ebuilds = dict()
 
     if successful_channels_only:
+        # Only CI-tested packages are eligible; anything without a test result
+        # (e.g. a product this overlay's workflows don't build) is left alone.
         test_results = collect_test_results(from_event=False)
-        channels = [
-            channel
+        targets = [
+            (product_from_path(result["ebuild_path"]), channel)
             for channel, result in test_results.items()
             if result["conclusion"] == "success"
         ]
+        targets = [t for t in targets if t[0] in products]
     else:
-        channels = CHANNELS
+        targets = [(product, channel) for product in products for channel in CHANNELS]
 
-    for channel in channels:
-        ebuilds, ebuild_dir = get_ebuilds(channel, repo_dir=repo_dir)
+    for product, channel in targets:
+        ebuilds, ebuild_dir = get_ebuilds(channel, base_name=product, repo_dir=repo_dir)
 
         if len(ebuilds) > 1:
             dropped = []
-            name = make_name_from_channel(channel)
+            name = make_name_from_channel(channel, base_name=product)
             for ebuild in ebuilds[:-1]:
                 if commit_changes:
                     subprocess.run(["git", "rm", ebuild], check=True)
@@ -308,9 +387,11 @@ def prune_ebuilds(repo_dir=None, commit_changes=False, successful_channels_only=
                     os.unlink(ebuild)
                 version = extract_version(ebuild)
                 dropped.append(version)
-                pruned_ebuilds.setdefault(channel, []).append(version)
+                pruned_ebuilds.setdefault(product, {}).setdefault(channel, []).append(
+                    version
+                )
 
-            update_manifest(ebuild_dir, name)
+            update_manifest(ebuild_dir, name, arches=get_arches(product, channel))
 
             if commit_changes:
                 subprocess.run(
@@ -339,14 +420,17 @@ def write_step_summary(title, ebuilds=None):
     with open(summary_file, "a") as f:
         f.write(f"### {title}\n\n")
         if ebuilds:
-            for channel in CHANNELS:  # Iterate ebuilds in channel order
-                if channel not in ebuilds:
+            for product in PRODUCTS:
+                if product not in ebuilds:
                     continue
-                name = make_name_from_channel(channel)
-                for version in ebuilds[channel]:
-                    f.write(
-                        f"- **{channel.capitalize()}**: `www-client/{name}-{version}`\n"
-                    )
+                for channel in CHANNELS:  # Iterate ebuilds in channel order
+                    if channel not in ebuilds[product]:
+                        continue
+                    name = make_name_from_channel(channel, base_name=product)
+                    for version in ebuilds[product][channel]:
+                        f.write(
+                            f"- **{channel.capitalize()}**: `www-client/{name}-{version}`\n"
+                        )
             f.write("\n")
 
 
@@ -379,6 +463,21 @@ def main():
         action="store_true",
         help="Prune old ebuilds.",
     )
+    group.add_argument(
+        "--manifest",
+        action="store_true",
+        help="Regenerate the Manifest of every package from the ebuilds present.",
+    )
+    parser.add_argument(
+        "--product",
+        action="append",
+        choices=PRODUCTS,
+        metavar="NAME",
+        help=(
+            "Limit the operation to a product family "
+            f"({', '.join(PRODUCTS)}). May be repeated. Defaults to all."
+        ),
+    )
     parser.add_argument(
         "--prune-checked",
         action="store_true",
@@ -405,9 +504,15 @@ def main():
     new_ebuilds = None
     pruned_ebuilds = None
     repo_dir = os.path.join(os.path.dirname(__file__), "..")
+    products = tuple(args.product) if args.product else PRODUCTS
+
+    if args.manifest:
+        regen_manifests(repo_dir=repo_dir, products=products)
 
     if args.update:
-        new_ebuilds = update_ebuilds(repo_dir=repo_dir, commit_changes=args.commit)
+        new_ebuilds = update_ebuilds(
+            repo_dir=repo_dir, commit_changes=args.commit, products=products
+        )
         if args.verbose:
             print(json.dumps(new_ebuilds, indent=2))
         if args.step_summary:
@@ -418,6 +523,7 @@ def main():
             repo_dir=repo_dir,
             commit_changes=True,
             successful_channels_only=args.prune_checked,
+            products=products,
         )
         if args.verbose:
             print(json.dumps(pruned_ebuilds, indent=2))
