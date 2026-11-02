@@ -14,8 +14,6 @@ jobs:
   update-ebuilds:
     name: Update ebuilds
     runs-on: ubuntu-latest
-    outputs:
-      new_ebuilds: ${{ steps.update-ebuilds.outputs.new_ebuilds }}
     permissions:
       # Required to push changes to repo
       contents: write
@@ -31,16 +29,12 @@ jobs:
 
       - name: Update ebuilds
         id: update-ebuilds
-        run: |
-          python scripts/update_ebuilds.py -v --update --commit --step-summary
-          git push
+        run: python scripts/update_ebuilds.py -v --update --commit --step-summary
 
-      - name: Store HEAD commit hash
-        run: git rev-parse HEAD > commit_hash.txt
+      # This fork has no test pipeline, so old ebuilds are pruned right away,
+      # keeping only the newest version of each package.
+      - name: Prune ebuilds
+        run: python scripts/update_ebuilds.py -v --prune --commit --step-summary
 
-      - name: Upload commit hash
-        uses: actions/upload-artifact@v7
-        with:
-          name: commit_hash
-          path: commit_hash.txt
-          retention-days: 1
+      - name: Push changes
+        run: git push

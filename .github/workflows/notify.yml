@@ -6,7 +6,7 @@ name: 📢 Notify On Failure
 
 on:
   workflow_run:
-    workflows: ['⚙️ Update ebuilds', '🧪 Merge ebuilds']
+    workflows: ['⚙️ Update ebuilds']
     types: [completed]
   workflow_dispatch:
 

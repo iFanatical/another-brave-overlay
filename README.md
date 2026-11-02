@@ -9,17 +9,15 @@
 another-brave-overlay
 =====================
 
-![⚙️ Update](https://img.shields.io/github/actions/workflow/status/falbrechtskirchinger/another-brave-overlay/update-ebuilds.yml?style=flat-square&logo=github&label=%E2%9A%99%EF%B8%8F%20Update)
-![🧪 Merge (stable)](https://img.shields.io/github/actions/workflow/status/falbrechtskirchinger/another-brave-overlay/test-stable.yml?style=flat-square&logo=github&label=%F0%9F%A7%AA%20Merge%20(stable))
-![🧪 Merge (beta)](https://img.shields.io/github/actions/workflow/status/falbrechtskirchinger/another-brave-overlay/test-beta.yml?style=flat-square&logo=github&label=%F0%9F%A7%AA%20Merge%20(beta))
-![🧪 Merge (nightly)](https://img.shields.io/github/actions/workflow/status/falbrechtskirchinger/another-brave-overlay/test-nightly.yml?style=flat-square&logo=github&label=%F0%9F%A7%AA%20Merge%20(nightly))
-![🔍 Divergence](https://img.shields.io/github/actions/workflow/status/falbrechtskirchinger/another-brave-overlay/check-src-ebuilds.yml?style=flat-square&logo=github&label=%F0%9F%94%8D%20Divergence)
+![⚙️ Update](https://img.shields.io/github/actions/workflow/status/iFanatical/another-brave-overlay/update-ebuilds.yml?style=flat-square&logo=github&label=%E2%9A%99%EF%B8%8F%20Update)
+![🔍 Divergence](https://img.shields.io/github/actions/workflow/status/iFanatical/another-brave-overlay/check-src-ebuilds.yml?style=flat-square&logo=github&label=%F0%9F%94%8D%20Divergence)
 
 > **Fork note.** This is a fork of
 > [falbrechtskirchinger/another-brave-overlay](https://github.com/falbrechtskirchinger/another-brave-overlay)
-> that adds packages for **Brave Origin**. Everything else is unchanged and
-> tracks upstream. The CI badges above report upstream's status, not this
-> fork's.
+> that adds packages for **Brave Origin**. It also drops upstream's CI test
+> pipeline (the Gentoo container and merge tests): new ebuilds are published
+> untested, and older versions are pruned in the same run, leaving only the
+> newest ebuild per package. Everything else tracks upstream.
 
 This Gentoo overlay provides automatically generated ebuilds for the [Brave browser](https://brave.com/), a privacy-focused, open-source web browser based on Chromium. The ebuilds are based on the official Gentoo Google Chrome ebuilds, which are routinely checked for divergence, and adapted to deliver the stable, beta, and nightly versions of Brave via the following ebuilds:
 
